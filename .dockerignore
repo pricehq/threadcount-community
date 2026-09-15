@@ -1,0 +1,12 @@
+node_modules
+.next
+.photos
+.git
+.claude
+docs
+# The manual is read by the app at request time (Help), so it has to be in the image.
+!docs/manual
+patches/*.orig
+.env
+.env.*
+!.env.example

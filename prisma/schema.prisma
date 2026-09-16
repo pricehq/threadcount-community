@@ -1,0 +1,1413 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  ISSUER
+}
+
+model Facility {
+  id                   String    @id @default(cuid())
+  name                 String
+  location             String    @default("Linen Room")
+  coordinator          String    @default("")
+  /// How the linen room is reached, printed in the footer of the order form a ward manager signs. Held
+  /// here and nowhere else: the form carries a real health service's contacts, and the only place
+  /// a customer's own address and number may live is that customer's own settings.
+  coordinatorEmail     String    @default("")
+  coordinatorPhone     String    @default("")
+  /// The IANA zone this linen room actually stands in. Every date-only column (Issue.date,
+  /// Stocktake.date, Order.date, HandIn.date…) is "today" as this zone sees it, which is what
+  /// decides the month an issue is journalled in and the date printed on a credit slip. Brisbane
+  /// only because that is where the first facility was; a Perth or Hobart room sets its own.
+  timezone             String    @default("Australia/Brisbane")
+  defaultEntitlement   Int       @default(5)
+  /// The starting kit, in sets — a set being a top and a bottom — for the staff groups on the
+  /// starting-kit route (kitGroups): handed over on the first day, with more issued as needed up to
+  /// capSets. The FTE-table groups (nursingGroups) start on a number proposed by their hours instead,
+  /// and groups on manager approval start on none. A starting kit and not a yearly allowance, so it
+  /// is nothing to do with defaultEntitlement, which still counts garments per financial year for
+  /// everything that reads it.
+  initialSets          Int       @default(3)
+  /// The ceiling, in sets HELD at any one time, for every staff group in the building, whichever of
+  /// the three routes it is on. Six sets is twelve garments, and there is no financial year in it:
+  /// the only ways past it are a hand-in, which swaps rather than adds, and a coordinator's override,
+  /// recorded as one. The routes differ only in how somebody gets up to it — hours proposing a
+  /// number, a starting kit, or a manager approving a set at a time.
+  capSets              Int       @default(6)
+  defaultReorder       Int       @default(3)
+  exceptionHigh        Int       @default(10)
+  varianceReason       Int       @default(5) // a count gap this big or bigger has to carry a reason
+  glAccount            String    @default("")
+  journalDesc          String    @default("Uniform issues")
+  lastBackup           String    @default("")
+  logoData             String    @default("")
+  barcodeLookup        Boolean   @default(false) // ask a public barcode database for a product name when an unknown code is scanned
+  /// Single sign-on through the facility's own identity provider (SAML/OIDC via the Jackson
+  /// broker; the IdP metadata lives in Jackson, keyed by this facility's id). Domains decide whose
+  /// email reaches SSO; required means the password door is refused for everyone except admins
+  /// flagged break-glass; staff says wearers with an account may use it too (web only).
+  ssoEnabled           Boolean   @default(false)
+  ssoRequired          Boolean   @default(false)
+  ssoStaff             Boolean   @default(false)
+  ssoDomains           String[]  @default([])
+  staffGroups          String[]  @default([])
+  /// The staff groups on the FTE-table route: the hours they work propose their starting kit, off the
+  /// table on the signed order form, and a manager may sign above it up to capSets. A list of names
+  /// this facility chose rather than a test for letters in a name, because every employer names its
+  /// groups differently. Empty means none of its groups are on that route — there is no fallback.
+  /// Renaming a group renames it here too, which is the point: nobody's allowance may change because
+  /// a label was tidied up.
+  nursingGroups        String[]  @default([])
+  /// The staff groups on the starting-kit route: initialSets on the first day, then more as needed up
+  /// to capSets, with nothing to hand back first. Read and renamed exactly as nursingGroups is, and a
+  /// group may not be on both. A group on neither list is on manager approval — no starting kit, and
+  /// a manager approves a set at a time.
+  kitGroups            String[]  @default([])
+  orderSeq             Int       @default(0)
+  catalogSeq           Int       @default(0)
+  /// Numbers the staff-app requests (R-0001…). Incremented inside the same transaction that
+  /// creates the request, like orderSeq, so two people submitting at once can't collide on a code.
+  requestSeq           Int       @default(0)
+  /// Bumped once per successful mutation, by the three routes that can change anything here.
+  ///
+  /// The screens already know how to reload themselves — every mutation ends in router.refresh().
+  /// What they had no way to know was that somebody ELSE had changed something, so a phone on a
+  /// ward showed whatever the catalogue looked like when it was opened. Polling the whole snapshot
+  /// to find out would mean re-reading the facility's history every few seconds on every device;
+  /// polling this integer costs a primary-key lookup and a couple of hundred bytes, and the
+  /// expensive fetch happens only when the number has actually moved.
+  rev                  Int       @default(0)
+  /// Numbers the barcodes this room prints for garments that arrived without one. Incremented in
+  /// the same transaction that binds the code, like orderSeq, so two people labelling at once
+  /// cannot mint the same number.
+  barcodeSeq           Int       @default(0)
+  slipCollectionFooter String    @default("Collect from the Linen Room during opening hours. Enquiries: see coordinator.")
+  slipDeliveryFooter   String    @default("After hours deliveries are left with the manager or team leader on duty.")
+  slipOrg              String    @default("")
+  /// The plan, and where the facility stands on it. Written only by ThreadCount and
+  /// by sign-up; read by lib/plan.ts, which turns these six columns into the entitlements every
+  /// write door checks. `plan` is a code (hosted_small · hosted_facility · health_service ·
+  /// private; empty means "whatever a new sign-up gets"), `planStatus` is what was last
+  /// set (free · trial · active · read_only) and the dates decide what that means today — a trial
+  /// past trialEndsAt, or a paid year past paidUntil, runs a fortnight of grace and then goes
+  /// read-only. Nothing is ever deleted for money: read-only keeps every report, export and the
+  /// backup working.
+  ///
+  /// `grandfathered` is the promise the pricing page made while the product was free: every
+  /// facility created before plans went live keeps everything, hosted, for as long as it exists.
+  /// It survives a change of plan, so a grandfathered room that buys and later lapses falls back to
+  /// free, never to read-only. Only an explicit read_only overrides it.
+  plan                 String    @default("")
+  planNote             String    @default("")
+  planStatus           String    @default("free")
+  trialEndsAt          DateTime?
+  paidUntil            DateTime?
+  /// Where invoices go. A contact, set by the coordinator from Settings › Plan and shown to
+  /// nobody else.
+  billingEmail         String    @default("")
+  grandfathered        Boolean   @default(false)
+  isDemo               Boolean   @default(false)
+  demoResetAt          DateTime?
+  createdAt            DateTime  @default(now())
+  /// The health service this facility belongs to, if any. Set by ThreadCount when a
+  /// Health Service plan is sold. A member facility's entitlements come from the organisation's
+  /// plan row, not its own (lib/plan.ts), and its catalogue and suppliers may be published to it
+  /// from the organisation's. Nothing about a wearer crosses this line: the organisation sees
+  /// roll-ups, and reaching a facility's records still takes a coordinator account there.
+  orgId                String?
+  org                  Organisation? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  /// Card payments (Stripe), dormant until STRIPE_* is set. Ids only; no card data is ever here.
+  stripeCustomerId     String    @default("")
+  stripeSubscriptionId String    @default("")
+  /// What the checkout page collected and what was agreed to, kept for the invoice and the
+  /// record: the legal name and address the invoice is made out to, the tax id, the country
+  /// (ISO 3166-1 alpha-2, which is what decides the tax), month or year, and when each of the
+  /// three documents was ticked and at which version.
+  billingLegalName     String    @default("")
+  billingTaxId         String    @default("")
+  billingAddress       Json?
+  billingCountry       String    @default("")
+  billingCadence       String    @default("")
+  agreedTermsAt        DateTime?
+  agreedPrivacyAt      DateTime?
+  agreedSlaAt          DateTime?
+  agreedVersion        String    @default("")
+  /// The first-run checklist on the dashboard was dismissed by an admin (it also goes on its own
+  /// once every step is done, or after 60 days with most of them done).
+  checklistDismissed   Boolean   @default(false)
+
+  users         User[]
+  items         CatalogItem[]
+  barcodes      Barcode[]
+  stock         StockLevel[]
+  moves         StockMove[]
+  depts         Department[]
+  staff         Staff[]
+  issues        Issue[]
+  orders        Order[]
+  pickups       Pickup[]
+  stocktakes    Stocktake[]
+  suppliers     Supplier[]
+  approvals     Approval[]
+  alterations   Alteration[]
+  handins       HandIn[]
+  photos        Photo[]
+  locations     Location[]
+  auditEvents   AuditEvent[]
+  costChanges   CostChange[]
+  staffAccounts StaffAccount[]
+  requests      Request[]
+  waitlist      WaitlistEntry[]
+  kitChecks     KitCheck[]
+  notices       LinenNotice[]
+  damageReports DamageReport[]
+  disputes      RecordDispute[]
+  slips         Slip[]
+  staffDevices  StaffDevice[]
+
+  @@index([orgId])
+  planMails            PlanMail[]
+}
+
+/// A health service: several facilities under one owner, one plan, one sign-in for the people who
+/// run it, and a catalogue and supplier list the facilities can inherit. It is not a facility and
+/// holds no wearer, staff or issue records of its own — what it can see is what lib/orgdata.ts
+/// computes as roll-ups. Created only by ThreadCount.
+model Organisation {
+  id           String   @id @default(cuid())
+  name         String
+  createdAt    DateTime @default(now())
+  /// The plan the member facilities inherit — the same columns Facility carries, read by
+  /// lib/plan.ts in the facility's place whenever Facility.orgId is set.
+  plan         String   @default("health_service")
+  planStatus   String   @default("trial")
+  trialEndsAt  DateTime?
+  paidUntil    DateTime?
+  billingEmail String   @default("")
+  planNote     String   @default("")
+  /// Organisation-level single sign-on: one IdP connection (Jackson tenant "org:<id>") that every
+  /// member facility's coordinators may sign in through. Domains route an email to it.
+  ssoEnabled   Boolean  @default(false)
+  ssoDomains   String[] @default([])
+
+  facilities Facility[]
+  users      OrgUser[]
+  items      OrgCatalogItem[]
+  suppliers  OrgSupplier[]
+  events     OrgEvent[]
+}
+
+/// Somebody who runs a health service's uniform programme across its facilities. A fourth kind
+/// of identity (see lib/org/session.ts), never a coordinator: holding this account opens the
+/// organisation's roll-ups and its shared lists, and nothing inside any facility.
+model OrgUser {
+  id            String       @id @default(cuid())
+  orgId         String
+  org           Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  email         String       @unique
+  name          String
+  passwordHash  String
+  totpSecret    String       @default("")
+  totpEnabledAt DateTime?
+  inactive      Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  lastSeenAt    DateTime?
+
+  events OrgEvent[]
+
+  @@index([orgId])
+}
+
+/// A garment in the organisation's shared catalogue. Publishing writes it into each member
+/// facility's own catalogue (CatalogItem.orgItemId links back); the facility keeps its stock,
+/// barcodes, locations and reorder levels, and may change cost and supplier locally until the next
+/// publish. Sizes are append-only in the facility, as everywhere else.
+model OrgCatalogItem {
+  id        String       @id @default(cuid())
+  orgId     String
+  org       Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  item      String
+  gender    String       @default("Unisex")
+  type      String       @default("")
+  sku       String       @default("")
+  supplier  String       @default("")
+  cost      Float        @default(0)
+  groups    String[]     @default([])
+  sizes     String[]     @default([])
+  notes     String       @default("")
+  archived  Boolean      @default(false)
+  updatedAt DateTime     @updatedAt
+  createdAt DateTime     @default(now())
+
+  @@unique([orgId, item, gender])
+}
+
+model OrgSupplier {
+  id      String       @id @default(cuid())
+  orgId   String
+  org     Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name    String
+  contact String       @default("")
+  phone   String       @default("")
+  account String       @default("")
+  lead    Int?
+
+  @@unique([orgId, name])
+}
+
+/// What the organisation's people did: sign-ins, publishes, membership changes. Append-only.
+model OrgEvent {
+  id      String       @id @default(cuid())
+  orgId   String
+  org     Organisation @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  userId  String?
+  user    OrgUser?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action  String
+  detail  String       @default("")
+  ip      String       @default("")
+  at      DateTime     @default(now())
+
+  @@index([orgId, at])
+}
+
+model Supplier {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  name       String
+  contact    String   @default("")
+  phone      String   @default("")
+  account    String   @default("")
+  /// Where a purchase order is emailed from the order list. Blank means print or CSV only.
+  email      String   @default("")
+  lead       Int?
+  sort       Int      @default(0)
+
+  @@unique([facilityId, name])
+}
+
+model Approval {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  staffId    String
+  staff      Staff    @relation("ApprovalSubject", fields: [staffId], references: [id], onDelete: Cascade)
+  date       String
+  /// The approver's name exactly as it was signed on the form. It is a copy, not a lookup, and it
+  /// stays one: a form that has been signed does not start reading differently because the person
+  /// who signed it was later married, promoted or taken off the register. Every other place this
+  /// schema writes a name down beside an id — Order, HandIn, Stocktake — does it for the same
+  /// reason.
+  byName     String   @default("")
+  /// Which person on the register that signature belongs to, when the coordinator picked the
+  /// manager out of the register rather than typing them. It is what lets a manager's own history
+  /// of approvals be found, and lets it survive that manager being renamed, which matching on
+  /// byName never could.
+  ///
+  /// Nullable because it has to be: every approval recorded before the register search existed
+  /// carries a typed name and nothing else, and a manager who is not on the register — an agency
+  /// manager, one covering from another ward — still signs forms. A blank here means "we only have the signature",
+  /// never "nobody approved this".
+  ///
+  /// It is also the only reliable way to see that a manager approved their own kit: staffId ==
+  /// byStaffId says so outright, where two spellings of the same typed name never could. That case
+  /// is now allowed, so anything showing an approval has to be able to say when it happened.
+  byStaffId  String?
+  /// SetNull rather than Cascade or Restrict, and byName is what makes that safe. Cascade would
+  /// delete signed approvals along with the manager who signed them, taking the sets somebody was
+  /// actually issued off the record; Restrict would refuse to let the linen room remove a manager
+  /// who has ever approved anything, which is most of them. So the approval stays, the link goes,
+  /// and the name as signed is still there to read.
+  byStaff    Staff?   @relation("ApprovalApprover", fields: [byStaffId], references: [id], onDelete: SetNull)
+  sets       Int
+  fte        String   @default("")
+  notes      String   @default("")
+  used       Int      @default(0)
+  photoId    String? // photo of the signed order form
+  createdAt  DateTime @default(now())
+
+  @@index([staffId])
+  // The history screen asks "what has this manager approved?", which without this is a scan of
+  // every approval the facility has ever recorded.
+  @@index([byStaffId])
+}
+
+model Alteration {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  staffId    String
+  staff      Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  date       String
+  garment    String
+  desc       String   @default("")
+  status     String   @default("Requested")
+  createdAt  DateTime @default(now())
+
+  @@index([staffId])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  facilityId   String
+  facility     Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  email        String   @unique
+  passwordHash String
+  first        String
+  last         String
+  title        String   @default("")
+  role         Role     @default(ISSUER)
+  inactive     Boolean  @default(false)
+  /// Keeps a working password when the facility requires single sign-on: the fire escape.
+  ssoBreakGlass Boolean @default(false)
+  createdAt    DateTime @default(now())
+
+  /// Encrypted with a key derived from SESSION_SECRET — a one-time-password secret sitting in
+  /// plaintext is a second factor that one leaked dump removes for every account at once.
+  /// Set while enrolling; `totpEnabledAt` is what actually turns the requirement on.
+  totpSecret    String    @default("")
+  totpEnabledAt DateTime?
+
+  resets         PasswordReset[]
+  recovery       RecoveryCode[]
+  raisedRequests Request[]
+
+  @@index([facilityId])
+}
+
+/// ThreadCount's own administrative identity, separate from every facility.
+///
+/// Not a User. A User belongs to one facility and every query it can reach is scoped to that
+/// facility; an Operator belongs to none and is the one identity that sees across them. Keeping it
+/// in its own table means a missed role check on User can never become platform-wide access, and
+/// its session is a third cookie with a third key and a third claim name, so no arrangement of the other two tokens can be presented as this one.
+///
+/// SUPPORT is read-only with no reveal. OWNER may reveal masked contacts, flip switches and open the
+/// danger zone. Seeded with one OWNER row; adding a second person is a row plus an entry in the
+/// access policy in front of it, not a refactor.
+enum OperatorRole {
+  OWNER
+  SUPPORT
+}
+
+model Operator {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  name         String
+  role         OperatorRole @default(SUPPORT)
+  passwordHash String
+  /// Encrypted like User.totpSecret, but with a key derived from its own secret rather than
+  /// SESSION_SECRET: rotating this secret must never touch a customer's second factor,
+  /// and the reverse.
+  totpSecret    String    @default("")
+  totpEnabledAt DateTime?
+  inactive      Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  lastSeenAt    DateTime?
+
+  events   OperatorEvent[]
+  grants   RevealGrant[]
+  recovery OperatorRecoveryCode[]
+}
+
+/// Single-use codes for the day an operator's phone is lost. Hashed, shown once at enrolment.
+/// Without these a lost phone closes the password door until somebody clears the second factor
+/// over SSH — and until single sign-on exists, the password door is the only door.
+model OperatorRecoveryCode {
+  id         String    @id @default(cuid())
+  operatorId String
+  operator   Operator  @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+  codeHash   String
+  usedAt     DateTime?
+
+  @@index([operatorId])
+}
+
+/// The administrative audit trail. Append-only: nothing in the product updates or deletes a row, and an
+/// Operator with rows cannot be deleted (Restrict) — deactivate them instead, the same rule the
+/// register applies to a staff member with history.
+///
+/// `facilityId` is a plain column and deliberately NOT a relation. AuditEvent's facilityId cascades
+/// on delete, which would let a facility that closes its account erase every record of what an
+/// operator revealed about it. This table remembers regardless. It also lets an event be about
+/// nothing in particular — a switch flipped, a sign-in — where AuditEvent has nowhere to file it.
+model OperatorEvent {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id], onDelete: Restrict)
+  at         DateTime @default(now())
+  action     String
+  facilityId String   @default("")
+  subject    String   @default("")
+  detail     String   @default("")
+  ip         String   @default("")
+
+  @@index([at])
+  @@index([operatorId, at])
+  @@index([facilityId, at])
+}
+
+/// One row. Platform switches ThreadCount flips without a deploy. The environment
+/// still wins when set (SIGNUPS_DISABLED=1, DEMO_DISABLED=1): a box can be locked down by hand and
+/// nothing can open it again until the variable goes.
+model PlatformSwitch {
+  id              String   @id @default("platform")
+  signupsDisabled Boolean  @default(false)
+  demoDisabled    Boolean  @default(false)
+  /// Plans are live: new sign-ups start on Hosted Small instead of being grandfathered, and the
+  /// Plan tab appears in Settings. Off until the sixty days' notice to existing rooms has run.
+  plansLive       Boolean  @default(false)
+  updatedAt       DateTime @updatedAt
+}
+
+/// A thirty-minute window in which one masked contact field of one facility is shown unmasked.
+///
+/// A server-side row rather than a claim in the session cookie, so a grant can be revoked before it
+/// expires. The reason is recorded here and mirrored into OperatorEvent; the grant is the mechanism,
+/// the event is the record, and both are kept forever.
+model RevealGrant {
+  id         String   @id @default(cuid())
+  operatorId String
+  operator   Operator @relation(fields: [operatorId], references: [id], onDelete: Restrict)
+  facilityId String
+  field      String
+  reason     String
+  at         DateTime @default(now())
+  expiresAt  DateTime
+
+  @@index([operatorId, facilityId, expiresAt])
+}
+
+/// Single-use codes for the day the phone is lost.
+///
+/// Without these a locked-out admin is a locked-out facility, because deleting the last admin
+/// deletes everything. Stored hashed, like any other credential.
+model RecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+/// A password reset in flight.
+///
+/// The token is stored hashed, never in the clear: this table is in every backup, and a plaintext
+/// token in a leaked dump is a live key to an account until it expires. Rows are single-use and
+/// short-lived, and a successful reset changes the password hash, which invalidates every existing
+/// session for that user through the session token's password version.
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  requestIp String    @default("")
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Who changed what, and when.
+///
+/// Issues and stock movements already record their own actor, but nothing recorded the rest: who
+/// edited a price, moved a par level, archived a garment, deleted a staff record or changed the
+/// variance threshold. "Who changed this?" is the first question in any review of a hospital
+/// system, and until now the answer was "nobody knows".
+///
+/// Deliberately holds no values — only the operation and the record ids it touched. An audit trail
+/// that quoted the data would become a second copy of the staff register, growing forever, outside
+/// every retention rule that applies to the first one.
+model AuditEvent {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  at         DateTime @default(now())
+  userId     String
+  userName   String
+  op         String
+  target     String   @default("")
+  ip         String   @default("")
+
+  @@index([facilityId, at])
+}
+
+/// What a garment cost, and when it changed.
+///
+/// CatalogItem.cost is a single field, so raising a price silently overwrote what you used to pay
+/// and "what did these cost us last year" became unanswerable — which is a question finance asks
+/// every year. This keeps the old figures.
+///
+/// Unlike the audit trail this deliberately does hold a value, because the value is the entire
+/// point. It is a price, not personal information.
+model CostChange {
+  id         String      @id @default(cuid())
+  facilityId String
+  facility   Facility    @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  cost       Float
+  previous   Float?
+  at         DateTime    @default(now())
+  byName     String      @default("")
+
+  @@index([facilityId, at])
+  @@index([itemId, at])
+}
+
+/// A request for uniform, from the person who will wear it.
+///
+/// The spine of the staff app. Two rules shape every field here.
+///
+/// First: **no money**. There is no price, no basket and no payment anywhere in this model, and
+/// there must not be. Every garment is trust stock issued against a person's record; what it cost
+/// is the linen room's business and lives on Issue.
+///
+/// Second: **the manager sees it before the linen room does**. `status` starts at `awaiting` and
+/// the fulfilment fields stay null until someone approves. A request the linen room can act on is
+/// one a named person put their name to.
+model Request {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  code       String // human reference, e.g. R-2291
+
+  /// Who the uniform is for. Always the wearer, never the person who typed it in.
+  subjectId String
+  subject   Staff  @relation("RequestSubject", fields: [subjectId], references: [id], onDelete: Cascade)
+
+  /// Who raised it, when that is not the subject: a ward clerk at the desk, or a coordinator at
+  /// the counter. Both names sit on the order — the design is explicit that the subject is never
+  /// hidden behind whoever typed it.
+  raisedByStaffId String?
+  raisedByStaff   Staff?  @relation("RequestRaisedByStaff", fields: [raisedByStaffId], references: [id], onDelete: SetNull)
+  raisedByUserId  String?
+  raisedByUser    User?   @relation(fields: [raisedByUserId], references: [id], onDelete: SetNull)
+  /// Denormalised so the order still names them after the account goes.
+  raisedByName    String  @default("")
+
+  /// Why the uniform is needed, and anything the wearer wanted to add. Both sit on the request and
+  /// not on the line: a nurse asking for a tunic, trousers and a fleece is making one ask for one
+  /// reason, and making them justify each garment separately is the paperwork this replaces.
+  reason String @default("") // Worn out | Damaged | Lost | Extra for shifts
+  note   String @default("")
+
+  /// awaiting | declined | accepted | picking | ready | round | collected | delivered
+  ///
+  /// The machine is unchanged, but the decision step is now a ROLLUP of the lines: the manager
+  /// looks at the whole ask and approves in one action, while still being able to decline
+  /// individual lines. When they decide, if every line ended up `declined` the request goes
+  /// `declined`; if at least one line is `approved` it goes `accepted`, and only the approved
+  /// lines are picked, bagged and collected. One code, one pick, one collection either way.
+  status String @default("awaiting")
+
+  /// The approver, snapshotted at submit time. A later change of manager must not silently
+  /// re-address a request that is already with someone.
+  managerId     String?
+  managerName   String    @default("")
+  decidedAt     DateTime?
+  /// One of exactly three: Over allowance | Not needed right now | Wrong item for the role.
+  /// Always shown to the staff member — a decline without a reason is the thing this replaces.
+  /// Set only when the WHOLE request was refused; a partly-approved request carries its refusals
+  /// on the individual lines instead.
+  declineReason String?
+
+  /// counter | ward_round — chosen by the linen room, never by the requester, who finds out after
+  /// the fact.
+  route       String?
+  /// Four digits shown at the counter. Only ever set for the counter route.
+  collectCode String?
+  holdUntil   String  @default("")
+
+  /// Anyone on the ward may sign for a round bag, and whoever does is named on the requester's
+  /// order — so a bag that never arrived has a name against it.
+  signerName String?
+  signerRole String?
+  signedAt   DateTime?
+  /// Set when the bag HAS been picked up off the ward desk — by the requester on their own order,
+  /// or by the desk clerk clearing the pile (round.claim, from /my/orders/[id] and /my/round). The
+  /// unclaimed list is the delivered rows where this is still null; unclaimed bags are the linen
+  /// room's biggest waste, so the desk sees them above today's work.
+  claimedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  lines    RequestLine[]
+  events   RequestEvent[]
+  messages RequestMessage[]
+
+  @@unique([facilityId, code])
+  @@index([facilityId, status])
+  @@index([subjectId])
+  @@index([managerId])
+}
+
+/// One garment on a request.
+///
+/// A request used to carry a single garment, so a nurse who needed a tunic, trousers and a fleece
+/// raised three of them: three codes, three approval emails to the same manager on the same day,
+/// three rows on the linen room's queue, three bags. The garments moved onto lines so that one ask
+/// is one request — but each line keeps its OWN status, because a manager quite reasonably wants to
+/// approve the tunic and the trousers and refuse the fleece as over allowance. Only the approved
+/// lines are picked.
+model RequestLine {
+  id        String      @id @default(cuid())
+  requestId String
+  request   Request     @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  itemId    String
+  item      CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sizeIndex Int
+  qty       Int         @default(1)
+
+  /// awaiting | approved | declined. Every line starts `awaiting` and is settled when the manager
+  /// decides the request; the request's own status is then the rollup of these.
+  status String @default("awaiting")
+
+  /// Why this one garment was refused, from the same three reasons as a whole-request decline.
+  /// The wearer is always told which line was knocked back and why — otherwise a bag turning up
+  /// two garments short looks like the linen room lost them.
+  declineReason String?
+
+  /// The order the requester entered them in, kept so the manager's screen, the pick list and the
+  /// bag all read the same way down the page.
+  sort Int @default(0)
+
+  @@index([requestId])
+}
+
+/// One line of a request's timeline. Append-only: the screen is a history, so nothing here is
+/// ever updated or deleted, and the order they were written in is the order they are shown.
+model RequestEvent {
+  id        String   @id @default(cuid())
+  requestId String
+  request   Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  label     String
+  meta      String   @default("")
+  actorName String   @default("")
+  at        DateTime @default(now())
+
+  @@index([requestId])
+}
+
+/// A message about one request. There is no general inbox and no direct messaging: every message
+/// hangs off the thing it is about, which is what stops this becoming a chat app nobody staffs.
+model RequestMessage {
+  id         String    @id @default(cuid())
+  requestId  String
+  request    Request   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  /// True when the wearer wrote it; false when the linen room did.
+  fromStaff  Boolean
+  authorName String    @default("")
+  body       String
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([requestId])
+}
+
+/// Waiting for a size that is not on the shelf.
+///
+/// Joining needs no approval — the design is deliberate that a queue is not a request. Approval
+/// happens if and when the item lands and the person accepts it.
+model WaitlistEntry {
+  id         String      @id @default(cuid())
+  facilityId String
+  facility   Facility    @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  staffId    String
+  staff      Staff       @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sizeIndex  Int
+  /// Set when stock arrives; the item is held for this person for 48 hours from here.
+  offeredAt  DateTime?
+  acceptedAt DateTime?
+  leftAt     DateTime?
+  createdAt  DateTime    @default(now())
+
+  /// One place in the queue per garment and size. Joining twice is a bug, not a strategy.
+  @@unique([staffId, itemId, sizeIndex])
+  @@index([facilityId, itemId, sizeIndex])
+}
+
+/// A round of "does this match what is in your locker?", run across the facility.
+model KitCheck {
+  id         String    @id @default(cuid())
+  facilityId String
+  facility   Facility  @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  dueBy      String // ISO date
+  openedAt   DateTime  @default(now())
+  closedAt   DateTime?
+  openedBy   String    @default("")
+
+  answers KitCheckAnswer[]
+
+  @@index([facilityId])
+}
+
+/// One person's answer about one garment. A shortfall is written off, never charged — the cycle
+/// exists to correct the record and set par levels, not to chase anyone.
+model KitCheckAnswer {
+  id         String      @id @default(cuid())
+  kitCheckId String
+  kitCheck   KitCheck    @relation(fields: [kitCheckId], references: [id], onDelete: Cascade)
+  staffId    String
+  staff      Staff       @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sizeIndex  Int
+  onRecord   Int
+  confirmed  Int
+  answeredAt DateTime    @default(now())
+
+  @@unique([kitCheckId, staffId, itemId, sizeIndex])
+  @@index([kitCheckId, staffId])
+}
+
+/// A garment reported damaged. Two jobs: take it off the record, and start the replacement — but
+/// only when the person hands it in, which is why this is a report and not a write-off.
+model DamageReport {
+  id         String    @id @default(cuid())
+  facilityId String
+  facility   Facility  @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  staffId    String
+  staff      Staff     @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  issueId    String?
+  issue      Issue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  kind       String // Torn | Stained | Worn thin
+  note       String    @default("")
+  photoId    String?
+  requestId  String? // the replacement, if they asked for one
+  handedInAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([facilityId])
+  @@index([staffId])
+}
+
+/// "This isn't right" — someone saying the linen room's record of what they hold is wrong.
+///
+/// It needs its own model because it is the one thing a staff member can raise that has no order
+/// behind it, and the product rule is one message thread per order. Rather than bend that rule
+/// into a general inbox, a dispute is its own small object with its own queue on the linen-room
+/// side. Nothing about the record changes until a coordinator agrees it should.
+model RecordDispute {
+  id         String       @id @default(cuid())
+  facilityId String
+  facility   Facility     @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  staffId    String
+  staff      Staff        @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  itemId     String?
+  item       CatalogItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  sizeIndex  Int?
+  body       String
+  resolvedAt DateTime?
+  resolvedBy String       @default("")
+  createdAt  DateTime     @default(now())
+
+  @@index([facilityId, resolvedAt])
+  @@index([staffId])
+}
+
+/// A short broadcast from the linen room, shown on every staff member's home screen. Not a
+/// message — nobody replies to it, and it is not attached to an order.
+model LinenNotice {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  body       String
+  startsAt   String   @default("")
+  endsAt     String   @default("")
+  createdAt  DateTime @default(now())
+
+  @@index([facilityId])
+}
+
+/// A staff member's own read-only account.
+///
+/// Deliberately NOT a User. Coordinator sessions are checked by currentUser(), and a wearer who
+/// could satisfy that check would be one missed role test away from the issuing screens, the
+/// catalogue and the staff register. A separate model with a separate cookie means the answer is
+/// structural rather than a condition someone has to remember: a staff account cannot become a
+/// coordinator session, because it is not the same kind of thing.
+model StaffAccount {
+  id           String    @id @default(cuid())
+  facilityId   String
+  facility     Facility  @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  staffId      String    @unique
+  staff        Staff     @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  email        String    @unique
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  lastSeenAt   DateTime?
+
+  devices      StaffDevice[]
+
+  @@index([facilityId])
+}
+
+/// A phone that has asked to be told. Keyed to the staff account that registered it, never to a
+/// User; the token is write-only as far as any client is concerned — no screen and no API returns
+/// one, and lib/audit.ts drops it because its allow-list of id keys does not name it.
+///
+/// Not history. Somebody coming off the register, losing their account or being deleted takes
+/// their phones with them, so this cascades from all three and staff.delete's guard list must
+/// never count it: a notification nobody may receive is not a record of anything.
+model StaffDevice {
+  id         String       @id @default(cuid())
+  facilityId String
+  facility   Facility     @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  staffId    String
+  staff      Staff        @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  /// The account whose session registered it, so removing access takes its phones with it.
+  accountId  String
+  account    StaffAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  /// FCM registration token. Unique: a token belongs to exactly one staff account, and a phone
+  /// handed on to somebody else re-points rather than doubling.
+  token      String       @unique
+  platform   String       @default("android")
+  lastSeenAt DateTime     @default(now())
+  createdAt  DateTime     @default(now())
+
+  @@index([staffId])
+  @@index([facilityId])
+}
+
+/// What this person wants to be told about. One row per staff member; absent means every default,
+/// so nobody has to be written a row before they can be notified.
+model StaffNotifyPref {
+  staffId   String   @id
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  approved  Boolean  @default(true)
+  ready     Boolean  @default(true)
+  round     Boolean  @default(true)
+  kitcheck  Boolean  @default(true)
+  /// Something is waiting on you to approve. Belongs to whoever a request is ADDRESSED to — not to
+  /// "managers", who are not a class here: a request can land on somebody nobody reports to, and
+  /// they are the person who most needs telling. The sender asks whose request it is, never what
+  /// role the reader holds.
+  waiting   Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+model CatalogItem {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  sort       Int
+  item       String
+  gender     String   @default("Unisex")
+  type       String   @default("") // garment type: Shirt, Pants, Jacket… drives the tops/pants split for nursing entitlement
+  sku        String   @default("")
+  supplier   String   @default("")
+  cost       Float    @default(0)
+  /// The staff groups this garment is for, as the facility names them. EMPTY MEANS EVERY GROUP.
+  /// Compared ignoring case and outer spaces; ask through garmentForGroup() in lib/compute.
+  groups     String[] @default([])
+  notes      String   @default("")
+  sizes      String[] @default([])
+  archived   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  /// The organisation catalogue item this was published from, when it was. Plain string, no
+  /// relation: a facility that leaves its organisation keeps the garment and loses the link.
+  orgItemId  String?
+
+  barcodes       Barcode[]
+  stock          StockLevel[]
+  moves          StockMove[]
+  issues         Issue[]
+  orderLines     OrderLine[]
+  receiptLines   ReceiptLine[]
+  pickupLines    PickupLine[]
+  stocktakeLines StocktakeLine[]
+  handinLines    HandInLine[]
+  costs          CostChange[]
+  requestLines   RequestLine[]
+  waitlist       WaitlistEntry[]
+  kitAnswers     KitCheckAnswer[]
+  disputes       RecordDispute[]
+
+  @@unique([facilityId, sort])
+  @@index([facilityId])
+}
+
+model Barcode {
+  id         String      @id @default(cuid())
+  facilityId String
+  facility   Facility    @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  code       String
+  itemId     String
+  item       CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sizeIndex  Int
+  source     String      @default("bound")
+
+  @@unique([facilityId, code])
+  @@index([itemId])
+}
+
+// Where a garment physically lives. A tree: rooms hold shelves, shelves hold bays.
+// A variant has one home location (a placement, not a split of its quantity) — counting a
+// location walks its descendants. Laundry and External exist so a garment that has left the
+// shelf but not the building still has somewhere to be.
+model Location {
+  id         String     @id @default(cuid())
+  facilityId String
+  facility   Facility   @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  name       String
+  kind       String     @default("Shelf") // Room | Shelf | Bay | Laundry | External
+  parentId   String?
+  parent     Location?  @relation("LocationTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children   Location[] @relation("LocationTree")
+  sort       Int        @default(0)
+  archived   Boolean    @default(false)
+  createdAt  DateTime   @default(now())
+
+  levels     StockLevel[]
+  stocktakes Stocktake[]
+
+  @@unique([facilityId, name])
+  @@index([facilityId])
+  @@index([parentId])
+}
+
+model StockLevel {
+  id         String      @id @default(cuid())
+  facilityId String
+  facility   Facility    @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sizeIndex  Int
+  opening    Int         @default(0)
+  adj        Int         @default(0)
+  reorder    Int?
+  /// The supplier's own product code for this size (codes differ per size and
+  /// colour), printed on the order list so it can be keyed straight into the supplier's site.
+  supplierCode String    @default("")
+  preloved   Int         @default(0) // pre-loved pool for this size: handed-in / seconds, reissued free at $0
+  locationId String?
+  location   Location?   @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  @@unique([itemId, sizeIndex])
+  @@index([locationId])
+  @@index([facilityId])
+}
+
+model StockMove {
+  id         String      @id @default(cuid())
+  facilityId String
+  facility   Facility    @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  date       String
+  type       String
+  itemId     String
+  item       CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sizeIndex  Int
+  qty        Int
+  reason     String      @default("")
+  byName     String      @default("")
+  createdAt  DateTime    @default(now())
+
+  @@index([facilityId])
+}
+
+model Department {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  name       String
+  cc         String   @default("")
+  sort       Int      @default(0)
+
+  @@unique([facilityId, name])
+}
+
+model Staff {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  num        String
+  first      String
+  last       String
+  phone      String   @default("")
+  group      String   @default("")
+  dept       String   @default("")
+  top        String   @default("")
+  pants      String   @default("")
+  /// Which cut of uniform this person is offered: "Men's", "Women's", "Either" (both), or "" when
+  /// nobody has said yet. Named for what it decides — which garments the counter and the staff app
+  /// offer — and not for anybody's gender: a woman who wears the men's cut is set to Men's and
+  /// nobody has to argue about the label.
+  ///
+  /// BLANK MEANS EVERY STYLE, exactly as "Either" does, and blank is what every record starts as, so
+  /// nothing changes for anybody until a coordinator sets it. The two are kept apart in storage
+  /// only so the register can list who nobody has decided yet. Ask through garmentForStyle() in
+  /// lib/compute; normalUniformStyle() is what turns a CSV cell or an old label into one of these.
+  uniformStyle String @default("")
+  ccOverride String   @default("")
+  inactive   Boolean  @default(false)
+  ent        Int?
+  /// Combined FTE as the order form writes it — "1.0" down to "0.1", or "Casual". A string, and the
+  /// same shape as Approval.fte, because Casual is not a number and rounding it to one loses the
+  /// discretion the form deliberately gives the manager. Blank on every existing row, and blank has to
+  /// go on behaving as it does today: the table then proposes nothing at all, rather than proposing
+  /// a kit of nought.
+  fte        String   @default("")
+  start      String   @default("")
+  notes      String   @default("")
+  createdAt  DateTime @default(now())
+
+  /// The one-time code a staff member types to claim their own read-only account. Globally unique
+  /// because it is presented before we know which facility they belong to — the code alone has to
+  /// identify them. Cleared once used, and stale once activateCodeAt is old enough, so a printed
+  /// slip left on a desk stops working whether or not anyone ever claimed it.
+  activateCode   String?       @unique
+  /// When that code was printed. A slip is a bearer token on paper: whoever holds it can set an
+  /// e-mail and password on this record, so it has to go stale on its own rather than only when
+  /// somebody remembers to cancel it. Also what lets the register say how old an outstanding code
+  /// is instead of just that there is one.
+  activateCodeAt DateTime?
+  account        StaffAccount?
+
+  /// The one named person who approves this staff member's requests. Not "any manager on the
+  /// ward" and not a rota — a request with no manager has no addressee and cannot be raised, so
+  /// the linen room has to set this before self-service is any use to them.
+  managerId String?
+  manager   Staff?  @relation("StaffManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports   Staff[] @relation("StaffManager")
+
+  /// Ward clerks sign for the bags the round drops at their ward. Scoped to that ward — a flag,
+  /// not a role, because the person on the desk changes and the register is where that is already
+  /// tracked.
+  wardDesk Boolean @default(false)
+
+  requests       Request[]        @relation("RequestSubject")
+  raisedRequests Request[]        @relation("RequestRaisedByStaff")
+  waitlist       WaitlistEntry[]
+  kitAnswers     KitCheckAnswer[]
+  damageReports  DamageReport[]
+
+  issues         Issue[]
+  orders         Order[]
+  pickups        Pickup[]
+  /// Approvals recorded ABOUT this person — their own signed order forms.
+  approvals      Approval[]      @relation("ApprovalSubject")
+  /// Approvals this person signed FOR somebody else. Empty for everyone who has never approved
+  /// anything, and empty too for an approval whose approver was typed rather than picked out of
+  /// the register.
+  approvalsGiven Approval[]      @relation("ApprovalApprover")
+  alterations    Alteration[]
+  handins        HandIn[]
+  disputes       RecordDispute[]
+  slips          Slip[]
+  devices        StaffDevice[]
+  notifyPref     StaffNotifyPref?
+
+  @@unique([facilityId, num])
+}
+
+model Issue {
+  id            String      @id @default(cuid())
+  facilityId    String
+  facility      Facility    @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  date          String
+  staffId       String
+  staff         Staff       @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  itemId        String
+  item          CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sizeIndex     Int
+  qty           Int
+  cond          String      @default("New")
+  cost          Float       @default(0) // unit cost at the time of issue — reports never re-price history
+  orderCode     String      @default("")
+  receipt       Boolean     @default(false)
+  returnedDate  String?
+  returnedCond  String?
+  override      Boolean     @default(false)
+  /// Issued outside the person's staff group on the coordinator's override. Kept apart from
+  /// `override`, which is the six-set ceiling's, so the record can tell the two apart.
+  offGroup      Boolean     @default(false)
+  /// Issued outside the person's uniform style on the coordinator's override — a men's cut to
+  /// somebody set to Women's, or the other way about. Its own flag beside offGroup and `override`
+  /// so the record says which rule was overridden, not merely that one was.
+  offStyle      Boolean     @default(false)
+  direct        Boolean     @default(false)
+  preloved      Boolean     @default(false) // issued free from the pre-loved pool: no cost, entitlement, approval or ledger effect
+  handedIn      String? // date the garment came back via a hand-in (informational)
+  returnPhotoId String? // damage evidence photo attached to a return
+  /// Why a flagged line (outside their group, not their cut, past the sets one person holds) was
+  /// issued anyway, from the counter phone's fixed list (OVERRIDE_REASONS in lib/compute). "" when the
+  /// line needed no reason. The flags themselves stay in override / offGroup / offStyle.
+  overrideReason String     @default("")
+  /// The signed slip this row was handed over on (Slip), when the phone took a signature.
+  slipId        String?
+  createdAt     DateTime    @default(now())
+
+  damageReports DamageReport[]
+
+  @@index([facilityId, date])
+  @@index([staffId])
+  @@index([slipId])
+}
+
+/// A signed hand-over at the counter phone: an issue, or a staff-app request collected. The drawn
+/// signature is a Photo (kind sig). `toStaff` sends it to the wearer's staff app, which shows the
+/// garments, sizes, date and signature only.
+model Slip {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  staffId    String
+  staff      Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  kind       String // issue | request
+  date       String // facility today
+  sigId      String? // Photo kind sig
+  toStaff    Boolean  @default(false)
+  requestId  String?
+  lines      Json // [{ itemId, si, qty }]
+  byName     String   @default("")
+  createdAt  DateTime @default(now())
+
+  @@index([facilityId])
+  @@index([staffId])
+}
+
+model Order {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  code       String
+  date       String
+  source     String   @default("Supplier Order")
+  orderFor   String   @default("Stock")
+  staffId    String?
+  staff      Staff?   @relation(fields: [staffId], references: [id], onDelete: SetNull)
+  supplier   String   @default("")
+  status     String   @default("Draft")
+  ref        String   @default("")
+  invoice    String   @default("")
+  tracking   String   @default("")
+  expected   String   @default("")
+  received   String   @default("")
+  cc         String   @default("")
+  notes      String   @default("")
+  replenish  Boolean  @default(false)
+  /// When the order was last emailed to the supplier / printed from the order list.
+  emailedAt  DateTime?
+  printedAt  DateTime?
+  parentId   String? // back orders point at the order they were split from
+  parent     Order?   @relation("BackOrder", fields: [parentId], references: [id], onDelete: SetNull)
+  backOrders Order[]  @relation("BackOrder")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  lines    OrderLine[]
+  receipts Receipt[]
+  pickups  Pickup[]
+
+  @@unique([facilityId, code])
+  @@index([facilityId])
+}
+
+model OrderLine {
+  id      String      @id @default(cuid())
+  orderId String
+  order   Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId  String
+  item    CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  size    String
+  qty     Int
+  sort    Int         @default(0)
+
+  @@index([orderId])
+}
+
+model Receipt {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  date      String
+  invoice   String   @default("")
+  note      String   @default("")
+  photoId   String? // photo of the supplier invoice
+  createdAt DateTime @default(now())
+
+  lines ReceiptLine[]
+
+  @@index([orderId])
+}
+
+model ReceiptLine {
+  id        String      @id @default(cuid())
+  receiptId String
+  receipt   Receipt     @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  itemId    String
+  item      CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  size      String
+  qty       Int
+  dest      String      @default("shelf")
+  cost      Float       @default(0)
+
+  @@index([receiptId])
+}
+
+model Pickup {
+  id             String   @id @default(cuid())
+  facilityId     String
+  facility       Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  orderId        String
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  staffId        String
+  staff          Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  received       String
+  contacted      Boolean  @default(false)
+  pickedUp       String?
+  deliveredTo    String   @default("") // delivery-round proof: who signed for it
+  sigId          String? // signature PNG (Photo)
+  proofId        String? // handover photo (Photo)
+  deliveredRound Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  lines PickupLine[]
+
+  @@index([facilityId])
+}
+
+model PickupLine {
+  id       String      @id @default(cuid())
+  pickupId String
+  pickup   Pickup      @relation(fields: [pickupId], references: [id], onDelete: Cascade)
+  itemId   String
+  item     CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  size     String
+  qty      Int
+
+  @@index([pickupId])
+}
+
+model Stocktake {
+  id         String    @id @default(cuid())
+  facilityId String
+  facility   Facility  @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  date       String
+  byName     String
+  counted    Int
+  variances  Int
+  mode       String    @default("shelf") // shelf | preloved
+  locationId String? // the location this count was scoped to; null = the whole linen room
+  location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  createdAt  DateTime  @default(now())
+
+  lines StocktakeLine[]
+
+  @@index([facilityId])
+}
+
+model StocktakeLine {
+  id          String      @id @default(cuid())
+  stocktakeId String
+  stocktake   Stocktake   @relation(fields: [stocktakeId], references: [id], onDelete: Cascade)
+  itemId      String
+  item        CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sizeIndex   Int
+  sys         Int
+  counted     Int
+  reason      String      @default("") // why the gap: At laundry | Condemned | Missing | Other
+
+  @@index([stocktakeId])
+}
+
+// Uniform hand-ins: good garments join the pre-loved pool, rags are tallied for disposal.
+model HandIn {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  date       String
+  staffId    String
+  staff      Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  byName     String
+  credit     Boolean  @default(false) // coordinator chose to credit the staff member's allowance
+  createdAt  DateTime @default(now())
+
+  lines HandInLine[]
+
+  @@index([facilityId])
+  @@index([staffId])
+}
+
+model HandInLine {
+  id        String      @id @default(cuid())
+  handInId  String
+  handIn    HandIn      @relation(fields: [handInId], references: [id], onDelete: Cascade)
+  itemId    String
+  item      CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sizeIndex Int
+  qty       Int
+  cond      String      @default("Good") // Good | Rag
+  laundered Boolean     @default(true)
+  credited  Int         @default(0) // qty that earned allowance credit (matched a real, un-returned shelf issue)
+
+  @@index([handInId])
+}
+
+// Camera captures and signatures, stored server-side (JPEG/PNG data URLs, downscaled on the device to <= 900px).
+// Only ids travel in the snapshot; the bytes are served by /api/photo/[id].
+/// A signature or a photograph.
+///
+/// `data` used to hold the whole image as a base64 data URL, which put every picture in the
+/// database and therefore in every dump. Images now live on disk and this row keeps only a
+/// pointer. `data` stays for rows written before the move — they are read from it and rewritten to
+/// disk by scripts/photos-to-disk.cjs — and is empty for everything new.
+model Photo {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  kind       String // approval | receipt | return | sig | proof
+  data       String   @default("")
+  path       String   @default("")
+  mime       String   @default("")
+  bytes      Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([facilityId])
+}
+
+/// Messages from the public contact form. Not tied to a Facility — the sender usually has no account
+/// yet. Read from the server; nothing in the app exposes these to a facility.
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  role      String   @default("")
+  facility  String   @default("")
+  email     String
+  topic     String   @default("")
+  slot      String   @default("")
+  message   String
+  ip        String   @default("")
+  emailed   Boolean  @default(false)
+  handled   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+/// One row per billing reminder actually sent, so the daily timer (scripts/plan-reminders.cjs) never
+/// sends the same one twice. `kind` carries the period it refers to, e.g. "trial7:2026-10-13", so a
+/// trial extended by the console gets a fresh set of reminders for its new end date.
+model PlanMail {
+  id         String   @id @default(cuid())
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  kind       String
+  sentAt     DateTime @default(now())
+
+  @@unique([facilityId, kind])
+}

@@ -1,0 +1,34 @@
+# Turns a pushed release tag into a GitHub Release, using the notes shipped with that tag.
+# Tags are named v<year>.<month>.<day>, with .2 or .3 added for a second release on the same day.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Only GitHub creates Releases; a mirror elsewhere that runs Actions skips this job.
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+            exit 0
+          fi
+          notes=RELEASE_NOTES.md
+          if [ ! -s "$notes" ]; then
+            notes="$RUNNER_TEMP/notes.md"
+            printf 'ThreadCount Community %s\n' "$TAG" > "$notes"
+          fi
+          gh release create "$TAG" --verify-tag --title "ThreadCount Community $TAG" --notes-file "$notes"

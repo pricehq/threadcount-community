@@ -1,0 +1,76 @@
+# ThreadCount, Community edition. See docs/self-hosting.md.
+#
+#   cp .env.example .env      # then set SESSION_SECRET and NEXT_PUBLIC_SITE_URL at least
+#   docker compose up -d --build
+#
+# Three services: the database, a one-shot migration that runs before the app on every start, and
+# the app itself. Put a reverse proxy with TLS in front of the published port (3000, or APP_PORT in
+# .env); the app sets Secure cookies in production and will not sign anyone in over plain HTTP from
+# another machine.
+name: threadcount
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: threadcount
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: threadcount
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U threadcount -d threadcount"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      target: builder
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+        NEXT_PUBLIC_TURNSTILE_SITEKEY: ${NEXT_PUBLIC_TURNSTILE_SITEKEY:-}
+        NEXT_PUBLIC_TERMS_URL: ${NEXT_PUBLIC_TERMS_URL:-}
+        NEXT_PUBLIC_PRIVACY_URL: ${NEXT_PUBLIC_PRIVACY_URL:-}
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://threadcount:${POSTGRES_PASSWORD}@db:5432/threadcount
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      target: runner
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+        NEXT_PUBLIC_TURNSTILE_SITEKEY: ${NEXT_PUBLIC_TURNSTILE_SITEKEY:-}
+        NEXT_PUBLIC_TERMS_URL: ${NEXT_PUBLIC_TERMS_URL:-}
+        NEXT_PUBLIC_PRIVACY_URL: ${NEXT_PUBLIC_PRIVACY_URL:-}
+    restart: unless-stopped
+    env_file: .env
+    # These win over anything in .env: the container's own port and paths are not the operator's to
+    # move (APP_PORT below is the host side), and the database is the bundled one.
+    environment:
+      DATABASE_URL: postgresql://threadcount:${POSTGRES_PASSWORD}@db:5432/threadcount
+      EDITION: community
+      PHOTO_DIR: /data/photos
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - photos:/data/photos
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  db:
+  photos:

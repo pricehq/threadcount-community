@@ -1,0 +1,11 @@
+-- The ceiling for the groups that never had one.
+--
+-- Operational Officers have always had a cap. Kitchen, retail, nutrition, security and the
+-- ambassadors have had none at all, so a request from one of them was weighed against nothing but
+-- the manager's patience. Six sets — twelve garments — is the figure the owner has set, and unlike
+-- the operational allowance nothing releases it on its own: the manager approves each set up to
+-- this number. Nursing never reaches it, because the NUM's signature is their control.
+--
+-- The default is not optional here. This runs against a live linen room with a row per facility,
+-- and a NOT NULL with nothing behind it fails on the first one.
+ALTER TABLE "Facility" ADD COLUMN "capSets" INTEGER NOT NULL DEFAULT 6;

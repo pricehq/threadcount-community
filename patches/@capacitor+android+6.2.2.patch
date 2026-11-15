@@ -1,0 +1,17 @@
+diff --git a/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/WebViewLocalServer.java b/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/WebViewLocalServer.java
+index 8e1cd63..e096096 100755
+--- a/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/WebViewLocalServer.java
++++ b/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/WebViewLocalServer.java
+@@ -346,7 +346,11 @@ public class WebViewLocalServer {
+         if (request.getRequestHeaders().get("Range") != null) {
+             InputStream responseStream = new LollipopLazyInputStream(handler, request);
+             String mimeType = getMimeType(path, responseStream);
+-            Map<String, String> tempResponseHeaders = handler.getResponseHeaders();
++            // Upstream fix (capacitor main, PathHandler.buildDefaultResponseHeaders): a COPY per request.
++            // The shared map was mutated below while Chromium read it on another thread — the
++            // bundled welcome video's Range requests crashed a fresh install on a Pixel 8 Pro
++            // (ArrayIndexOutOfBoundsException in org.jni_zero.JniUtil.mapToArray, 2026-09-12).
++            Map<String, String> tempResponseHeaders = new HashMap<>(handler.getResponseHeaders());
+             int statusCode = 206;
+             try {
+                 int totalRange = responseStream.available();
